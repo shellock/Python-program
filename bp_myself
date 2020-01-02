@@ -1,0 +1,353 @@
+import numpy as np
+import pandas as pd
+import math
+from PIL import Image
+import os
+from matplotlib import pyplot as plt
+
+class bp(object):
+    def __init__(self,precision,max_learning_time,learning_rate,hidden_nodes,sigmoid):
+        '''
+        parameter initialization
+        precision:计算精度
+        max_learning_time:最大学习次数
+        learning_rate:学习率
+        '''
+
+        self.precision=precision
+        self.max_learning_time=max_learning_time
+        self.learning_rate=learning_rate
+        self.hidden_nodes=hidden_nodes
+        self.sigmoid=sigmoid
+
+        print("Parameter Initialization is finished..")
+
+    def _contrast_network(self,feature_dimension,class_number):
+        '''
+        network structure initalization
+
+        hidden_nodes:隐藏节点数,自定的列表,list=[10]
+        hidden_layer:隐藏层层数, len(list)
+        input_nodes:输入层节点数
+        output_nodes:输出层节点数
+        weight_list:每层的权重
+
+        :param feature_dimension:样本特征维度
+        :param class_number:分类的类别数
+        :return:
+        '''
+
+        self.input_nodes=feature_dimension
+        self.output_nodes=class_number
+        self.hidden_layer=len(self.hidden_nodes)
+
+        #相邻两层的权重的生成，范围在-0.5-0.5,“+1”：多加一行偏执
+        weight_ih=np.random.random_sample(size=(self.input_nodes+1,self.hidden_nodes[0]))-0.5 #输入层到第一层隐藏层
+        self.weight_list=[weight_ih]
+        for i in range(1,self.hidden_layer):
+            #从当前层向前看一层
+            weight_hh=np.random.random_sample(size=(self.hidden_nodes[i-1]+1,self.hidden_nodes[i]))-0.5 #相邻隐藏层间的权重
+            self.weight_list.append(weight_hh)
+        weight_ho=np.random.random_sample(size=(self.hidden_nodes[-1]+1,self.output_nodes))-0.5 #隐藏层到输出层
+        self.weight_list.append(weight_ho)
+
+        network=[self.input_nodes]
+        network.extend(self.hidden_nodes)
+        network.append(self.output_nodes)
+        print("Network Construction Initalization is finished,",network)
+
+    def _activation(self,a):
+        '''
+        activation function:
+        param: a:
+        "log":
+        return: 1/(1+e^-a)
+
+        "tan":
+        return: (e^a - e^-a)/(e^a + e^-a)
+        '''
+
+        ea=np.exp(a)
+        e_a=np.exp(-a)
+        if self.sigmoid == "log":
+            return (e_a+1)**(-1)
+        elif self.sigmoid == "tan":
+            return (ea - e_a)/(ea + e_a)
+
+    def _derivative(self,y):
+        '''
+        the derivative of activation function 激活函数
+        '''
+        if self.sigmoid == "log":
+            return y*(1-y)
+        if self.sigmoid == "tan":
+            return (1+y)*(1-y)
+
+    def _forward_propagation(self,x_k):
+        '''
+        param: x_k:数据输入
+        '''
+        x_input=x_k
+        node_list=[]
+        for weight in self.weight_list:
+            h_input=x_input.dot(weight)
+            h_output=self._activation(h_input)
+            x_input=np.hstack((np.array([[1]]),h_output))
+            node_list.append((h_input,h_output))  #通过元组的形式添加列表List[touple(输入值h_input,激活值h_output)]
+        return node_list
+
+    def _back_propagation(self,d_o,node_list,x_input):
+        #计算输出层神经元的误差
+        y_output=node_list[-1][1]
+        sensitivity=(d_o-y_output)*self._derivative(y_output) #(目标值-计算值)*y'
+
+        #从后向前计算误差，h层的误差依赖于(h+1)层误差的计算值
+        for i in range(len(node_list)-2,-1,-1):
+            h_output=node_list[i][1]
+            #得到当前的输出值
+            
+            #修正层间的权重
+            self.weight_list[i+1]+=np.vstack((np.array([[1]]),h_output.T)).dot(sensitivity)*self.learning_rate
+
+            #得到这一层的误差
+            dh_output=self._derivative(h_output)
+            w_h=self.weight_list[i+1][1:] #不能取到偏执项
+            sensitivity=sensitivity.dot(w_h.T)*dh_output
+
+        #修正 输入层-隐藏层的权重
+        self.weight_list[0]+=x_input.T.dot(sensitivity)*self.learning_rate   
+           
+    def _training(self,training_data,destination):
+        #训练数据，搭建网络
+        data_quantity,feature_dimension=np.shape(training_data)
+        data_quantity,class_number=np.shape(destination)
+        self._contrast_network(feature_dimension,class_number)
+        x0=np.ones(shape=(data_quantity,1),dtype=float)
+        input_data=np.hstack((x0,training_data))
+
+        print("Training Start..")
+
+        E_sum=0#全局的误差值
+        learning_time=0#学习次数
+        k=0#第k个数据
+        #对训练数据进行计算至收敛
+        while learning_time <= self.max_learning_time:
+            learning_time+=1
+            #先进行前向传播，将得到的值存在node_list中
+            xi_k=np.array([input_data[k]])
+            node_list=self._forward_propagation(xi_k)
+            #print(node_list)
+
+            #计算全局误差是否达到精度要求
+            E_sum+=np.average((node_list[-1][1]-destination[k])**2)/2
+            E=E_sum/learning_time
+            if E < self.precision :
+                break
+
+            #反向传播，修改权重
+            self._back_propagation(destination[k],node_list,xi_k)
+
+            k+=1
+            if k >= data_quantity:
+                k=0
+            #第一轮训练完毕后训练第二轮
+        
+        print("Training finished..")
+        print("Learning count :",learning_time,data_quantity)
+        print("E:",E)
+
+    def _predicting(self,feature):
+        #对一个样本进行预测
+        feature=np.array([feature])
+        x_input=np.hstack((np.array([[1]]),feature))
+        calculation=self._forward_propagation(x_input)
+        y_output=list(calculation[-1][1][0,:])
+        '''
+        if y_output[0] > 0.5 :
+            return 1
+        else :
+            return 0
+        '''
+        return y_output.index(max(y_output))
+
+    def _varify(self,text_data,destination):
+        #对测试集观测正确率
+        data_quantity,feature_dimension=np.shape(text_data)
+        print("data quantity :",data_quantity)
+        correct=0
+        for i in range(data_quantity):
+            temp=self._predicting(text_data[i])
+            '''
+            print("分类结果：",temp,end="")
+            print("类别：",destination[i])
+            '''
+            if temp == destination[i][0] :
+                correct+=1
+        return correct/data_quantity
+    
+    def _image_transfer(self,path):
+        '''
+        获取图片文件夹下的所有图片
+        并将图片转换成矩阵数据
+        param:path:图片的路径
+        return:trainlist:格式：np.array(np.array),[np.array],len(imgpathlist):图片（也就是数据）的个数
+
+        trainlist:存储训练集数据
+        '''
+        trainlist=[]
+        imgpathlist=os.listdir(path)
+        for imagename in imgpathlist:
+            #开始遍历图片
+            imagepath=path+imagename
+            temp=np.array(Image.open(imagepath)).flatten()
+            temp_max=temp.max()
+            temp_min=temp.min()
+            temp_normalition=(temp-temp_min)/(temp_max-temp_min)
+            trainlist.append(temp_normalition)
+        return np.array(trainlist),len(imgpathlist)
+
+def matplot(learning_rate_list,correct_rate_list):
+    '''
+    绘制成功率-学习率的折线图
+    '''
+    plt.plot(learning_rate_list,correct_rate_list)
+    plt.xlabel('learning rate')
+    plt.ylabel('correct rate')            
+    plt.title('correct rate - learning rate ')
+    plt.show()
+
+if __name__=="__main__":
+    '''
+    设置数据初值：
+    train_data
+    train_destination
+    text_data
+    text_destination
+    '''
+    labels=[
+        [1,0,0,0,0,0,0,0,0,0],[0,1,0,0,0,0,0,0,0,0],[0,0,1,0,0,0,0,0,0,0],[0,0,0,1,0,0,0,0,0,0],[0,0,0,0,1,0,0,0,0,0],
+        [0,0,0,0,0,1,0,0,0,0],[0,0,0,0,0,0,1,0,0,0],[0,0,0,0,0,0,0,1,0,0],[0,0,0,0,0,0,0,0,1,0],[0,0,0,0,0,0,0,0,0,1]
+            ]
+    BP=bp(0.004,100000,0.2,[40],"log")
+    train_father_dirpath='I://实验室//bp神经网络//MNIST_data//123//'
+    #父目录，目录下有0-9的训练数字文件夹
+    for i in range(10):
+        train_dirpath=train_father_dirpath+str(i)+'//'
+        #得到第i个数字的训练集矩阵,格式为[[数据1],[数据2],..],i_num为len(train_data)
+        train_data_i,i_num=BP._image_transfer(train_dirpath)
+        if i == 0:
+            train_data=train_data_i
+            train_destination=np.tile(np.array(labels[0]),(i_num,1))
+        else:
+            train_data=np.vstack((train_data,train_data_i))
+            train_destination=np.vstack((train_destination,np.tile(np.array(labels[i]),(i_num,1))))
+    '''
+    train_data=np.array([[1,0],[2,0],[0,1],[-1,2]])
+    train_destination=np.array([[1],[1],[0],[0]])
+    text_data=np.array([[2,1],[0,2]])
+    text_destination=np.array([1,0,])
+    '''
+    text_father_dirpath='I://实验室//bp神经网络//MNIST_data//mnist_test//'
+    for i in range(10):
+        text_dirpath=text_father_dirpath+str(i)+'//'
+        #和训练集类似的处理
+        text_data_i,i_num=BP._image_transfer(text_dirpath)
+        if i == 0:
+            text_data=text_data_i
+            text_destination=np.tile(np.array([0]),(i_num,1))
+        else:
+            text_data=np.vstack((text_data,text_data_i))
+            text_destination=np.vstack((text_destination,np.tile(np.array([i]),(i_num,1))))
+    
+    BP._training(train_data,train_destination)
+
+    #训练完成
+
+
+
+    correct_rate=BP._varify(text_data,text_destination)
+    print("correct rate:",correct_rate)
+
+    '''
+    #找最佳学习率
+    
+    learning_rate_list=[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1]
+    correct_rate_list=[]
+    #初始化学习率列表
+    #开始找最佳学习率
+    
+    for learning_rate in learning_rate_list:
+
+        BP=bp(0.005,10000,learning_rate,[40],"log")    =
+        BP._training(train_data,train_destination)
+
+        #训练完成
+
+
+
+        correct_rate=BP._varify(text_data,text_destination)
+        print("correct rate:",correct_rate)
+        correct_rate_list.append(correct_rate)
+    
+    #画图
+    matplot(learning_rate_list,correct_rate_list)
+    '''    
+
+    #在上面的训练中发现学习率0-1最佳为0.2而大部分10000的次数没有训练够，所以下面我把精度调低
+    
+    '''
+    precision_list=[0.005,0.004,0.003,0.002,0.001]
+    correct_rate_list=[]
+    #初始化精度列表
+    
+    for precision in precision_list:
+
+        BP=bp(precision,100000,0.2,[40],"log")    
+        BP._training(train_data,train_destination)
+
+        #训练完成
+
+
+
+        correct_rate=BP._varify(text_data,text_destination)
+        print("correct rate:",correct_rate)
+        correct_rate_list.append(correct_rate)
+    
+    #画图
+    matplot(precision_list,correct_rate_list)
+    '''
+
+    #上面训练发现0.005-0.001中0.004的精度最合适，接下来调隐藏层为一层的节点数
+    
+    '''
+    nodes_list=[10,20,30,40,50]
+    correct_rate_list=[]
+    #初始化精度列表
+    
+    for nodes in nodes_list:
+
+        BP=bp(0.004,100000,0.2,[nodes],"log")    
+        BP._training(train_data,train_destination)
+
+        #训练完成
+
+
+
+        correct_rate=BP._varify(text_data,text_destination)
+        print("correct rate:",correct_rate)
+        correct_rate_list.append(correct_rate)
+    
+    #画图
+    matplot(nodes_list,correct_rate_list)
+    '''
+
+    #在20-50 中节点数为40最合适
+
+
+
+
+
+
+
+
+
